@@ -15,14 +15,14 @@ from app.database.database import get_db
 from app.security.jwt import create_access_token
 from app.security.auth import get_current_user
 
-# Modelos SQLAlchemy (módulos en PLURAL)
+# Modelos SQLAlchemy
 from app.models.usuarios import User
 from app.models.obras import Obra
 from app.models.presupuestos import Presupuesto
 from app.models.asignaciones import Asignacion
 from app.models.asistencias import Asistencia
 
-# Schemas Pydantic (módulos en PLURAL)
+# Schemas Pydantic
 from app.schemas.usuarios import UsuarioCreate, UsuarioResponse
 from app.schemas.obras import ObraCreate, ObraResponse
 from app.schemas.presupuestos import PresupuestoCreate, PresupuestoResponse
@@ -41,41 +41,27 @@ app = FastAPI(
 # ---------------------------
 # LOGIN con JWT (usando dni + nombre)
 # ---------------------------
-
 class LoginRequest(BaseModel):
     dni: str
     nombre: str
 
 @app.post("/login")
 def login(data: LoginRequest, db: Session = Depends(get_db)):
-    """
-    Recibe: dni y nombre como JSON.
-    Devuelve: access_token Bearer JWT.
-    """
     user = db.query(User).filter(User.dni == data.dni, User.nombre == data.nombre).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciales inválidas")
 
-    # El subject del token será el dni
     access_token = create_access_token(data={"sub": user.dni})
     return {"access_token": access_token, "token_type": "bearer"}
 
-
 @app.get("/me", response_model=UsuarioResponse)
 def me(current_user: User = Depends(get_current_user)):
-    """Devuelve el usuario autenticado a partir del token Bearer."""
     return current_user
 
-# ---------------------------
-# RUTA DE BIENVENIDA
-# ---------------------------
 @app.get("/")
 async def root():
     return {"message": "¡Bienvenido al Sistema de Obras SEFY!"}
 
-# ---------------------------
-# HEALTH CHECK
-# ---------------------------
 @app.get("/health")
 async def health_check(db: Session = Depends(get_db)):
     try:
@@ -85,31 +71,23 @@ async def health_check(db: Session = Depends(get_db)):
         return {"status": "unhealthy", "database": "disconnected", "error": str(e)}
 
 # =====================================================
-# USUARIOS (dni PK)
+# USUARIOS
 # =====================================================
 @app.post("/usuarios/", response_model=UsuarioResponse, status_code=201)
 def crear_usuario(data: UsuarioCreate, db: Session = Depends(get_db)):
     if db.get(User, data.dni):
         raise HTTPException(status_code=400, detail="El DNI ya existe")
 
-    # Evitar duplicado de email/mail
-    # Preferimos 'mail' si tu modelo lo usa (como en auth.py). Si tu schema usa 'email', mapear a 'mail'.
-    email_value = getattr(data, "email", None) or getattr(data, "mail", None)
+    email_value = getattr(data, "email", None)
     if email_value and db.query(User).filter(User.email == email_value).first():
         raise HTTPException(status_code=400, detail="El email ya está en uso")
 
-    # Construcción del modelo
     nuevo = User(**data.dict())
 
-    # Si el schema trae password plano, lo hasheamos y lo guardamos en hashed_password
     if hasattr(data, "password") and getattr(data, "password"):
+        from app.security.hashing import hash_password  # asegúrate de tener esta función
         hp = hash_password(getattr(data, "password"))
-        # asegurar atributo en el modelo
         setattr(nuevo, "hashed_password", hp)
-
-    # Si el schema usa 'email' pero el modelo usa 'mail', mapear:
-    if hasattr(nuevo, "email") and hasattr(nuevo, "mail") and nuevo.email and not nuevo.mail:
-        nuevo.mail = nuevo.email  # mantener compatibilidad con auth.py
 
     db.add(nuevo)
     db.commit()
@@ -133,23 +111,17 @@ def actualizar_usuario(dni: str, data: UsuarioCreate, db: Session = Depends(get_
     if not u:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
-    email_value = getattr(data, "email", None) or getattr(data, "mail", None)
-    if email_value and email_value != getattr(u, "mail", None):
-        if db.query(User).filter(User.mail == email_value).first():
+    email_value = getattr(data, "email", None)
+    if email_value and email_value != getattr(u, "email", None):
+        if db.query(User).filter(User.email == email_value).first():
             raise HTTPException(status_code=400, detail="El email ya está en uso")
 
-    # actualizar campos simples
     for k, v in data.dict().items():
-        # no pisar hashed_password por error si el schema no lo trae
         if k == "password" and v:
-            # si envían password en update, re-hasheamos
+            from app.security.hashing import hash_password
             setattr(u, "hashed_password", hash_password(v))
         elif hasattr(u, k):
             setattr(u, k, v)
-
-    # sincronizar email->mail si corresponde
-    if hasattr(u, "email") and hasattr(u, "mail") and getattr(u, "email", None):
-        u.mail = u.email
 
     db.commit()
     db.refresh(u)
