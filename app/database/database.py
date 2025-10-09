@@ -8,7 +8,13 @@ load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-engine = create_engine(DATABASE_URL)
+engine = create_engine(
+    DATABASE_URL,
+    pool_size=5,        # máximo 5 conexiones abiertas
+    max_overflow=0,     # no cree más conexiones extra
+    pool_timeout=30,    # espera antes de dar error
+    pool_recycle=1800,  # recicla conexiones cada 30 min (previene cortes)
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 try:
